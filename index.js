@@ -11,7 +11,7 @@ const app = express();
 const upload = multer({ dest: "uploads/" });
 const PORT = process.env.PORT || 10000;
 
-// ✅ CORS toestaan alleen vanaf jouw domein
+// ✅ CORS: alleen jouw domein toestaan
 app.use(cors({
   origin: ["https://voice.rapx.nl"],
   methods: ["GET", "POST", "OPTIONS"],
@@ -20,7 +20,7 @@ app.use(cors({
 
 app.use(express.json());
 
-// 🔹 Testendpoint om te checken of server leeft
+// 🔹 Testendpoint
 app.get("/api/ping", (req, res) => {
   console.log("✅ Ping ontvangen van client");
   res.json({ ok: true, msg: "Server actief" });
@@ -45,23 +45,25 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
 
     console.log(`🎧 Ontvangen audio: ${req.file.originalname} (${mimetype}, ${req.file.size} bytes)`);
 
-    const fileStream = fs.createReadStream(req.file.path);
+    // ✅ Lees bestand in en maak er een Blob van (nodig voor Node 22)
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const blob = new Blob([fileBuffer], { type: mimetype });
+
+    // ✅ FormData correct vullen
+    const form = new FormData();
+    form.append("model", "whisper-1");
+    form.append("file", blob, req.file.originalname);
 
     const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
-      body: (() => {
-        const form = new FormData();
-        form.append("model", "whisper-1");
-        form.append("file", fileStream, req.file.originalname);
-        return form;
-      })(),
+      body: form,
     });
 
     const data = await response.json();
-    fs.unlink(req.file.path, () => {}); // verwijder tijdelijk bestand
+    fs.unlink(req.file.path, () => {}); // tijdelijk bestand wissen
 
     console.log("✅ Whisper antwoord:", data);
 
@@ -70,7 +72,6 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     }
 
     res.json({ text: data.text });
-
   } catch (err) {
     console.error("💥 Fout bij transcribe:", err);
     res.status(500).json({ error: "Transcribe-fout", detail: err.message });
