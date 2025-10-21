@@ -1,93 +1,128 @@
-// ✅ Express server voor RapX voice assistant
 import express from "express";
-import cors from "cors";
 import multer from "multer";
-import fs from "fs";
-import path from "path";
 import fetch from "node-fetch";
+import cors from "cors";
 import dotenv from "dotenv";
+import fs from "fs";
 
 dotenv.config();
+
 const app = express();
+const upload = multer({ dest: "uploads/" });
 const PORT = process.env.PORT || 10000;
 
-// ✅ CORS instellen zodat voice.rapx.nl toegang heeft
-app.use(
-  cors({
-    origin: ["https://voice.rapx.nl", "http://voice.rapx.nl"],
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
+// ✅ CORS toestaan alleen vanaf jouw domein
+app.use(cors({
+  origin: ["https://voice.rapx.nl"],
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+}));
 
-// ✅ Middleware
 app.use(express.json());
-const upload = multer({ dest: "uploads/" });
 
-// ✅ Test endpoint
+// 🔹 Testendpoint om te checken of server leeft
 app.get("/api/ping", (req, res) => {
-  res.json({ ok: true });
+  console.log("✅ Ping ontvangen van client");
+  res.json({ ok: true, msg: "Server actief" });
 });
 
-// ✅ Transcriptie (spraak → tekst)
+// 🔹 AUDIO → TEKST via Whisper
 app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
   try {
-    const audioPath = req.file.path;
+    if (!req.file) {
+      console.error("❌ Geen audiobestand ontvangen");
+      return res.status(400).json({ error: "Geen bestand ontvangen" });
+    }
 
-    const openaiRes = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    const mimetype = req.file.mimetype || "";
+    if (
+      !mimetype.startsWith("audio/ogg") &&
+      !mimetype.startsWith("audio/webm")
+    ) {
+      console.error("❌ Ongeldig audioformaat:", mimetype);
+      return res.status(400).json({ error: "Ongeldig audioformaat" });
+    }
+
+    console.log(`🎧 Ontvangen audio: ${req.file.originalname} (${mimetype}, ${req.file.size} bytes)`);
+
+    const fileStream = fs.createReadStream(req.file.path);
+
+    const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: (() => {
         const form = new FormData();
-        form.append("file", fs.createReadStream(audioPath));
         form.append("model", "whisper-1");
+        form.append("file", fileStream, req.file.originalname);
         return form;
       })(),
     });
 
-    const data = await openaiRes.json();
-    fs.unlinkSync(audioPath);
+    const data = await response.json();
+    fs.unlink(req.file.path, () => {}); // verwijder tijdelijk bestand
 
-    res.json({ text: data.text || "" });
+    console.log("✅ Whisper antwoord:", data);
+
+    if (!data.text) {
+      return res.status(500).json({ error: "Geen tekst ontvangen van Whisper" });
+    }
+
+    res.json({ text: data.text });
+
   } catch (err) {
-    console.error("❌ Fout bij transcriberen:", err);
-    res.status(500).json({ error: "Transcriberen mislukt" });
+    console.error("💥 Fout bij transcribe:", err);
+    res.status(500).json({ error: "Transcribe-fout", detail: err.message });
   }
 });
 
-// ✅ Herschrijven (AI herschrijft korte input tot nette zin)
+// 🔹 KORTE ZIN → VOLLEDIGE ZIN herschrijven
 app.post("/api/rewrite", async (req, res) => {
   try {
     const { kopje, raw } = req.body;
 
-    const prompt = `
-Je bent een verzekeringsinspecteur. Zet de volgende korte notitie om in een volledige nette zin.
-Onderwerp: ${kopje}.
-Notitie: "${raw}".
-`;
+    if (!raw) {
+      return res.status(400).json({ error: "Geen tekst meegegeven" });
+    }
 
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    const prompt = `
+    Zet de volgende ruwe observatie om in een volledige, nette zin
+    die geschikt is voor een inspectierapport onder het kopje "${kopje}".
+    Vermijd opsommingstekens en maak de zin vloeiend.
+    Observatie: "${raw}"
+    `;
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          { role: "system", content: "Je bent een zakelijke rapporteditor die korte notities omzet in complete zinnen." },
+          { role: "user", content: prompt }
+        ],
+        temperature: 0.3,
       }),
     });
 
-    const data = await openaiRes.json();
-    const tekst = data.choices?.[0]?.message?.content?.trim() || raw;
-    res.json({ text: tekst });
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content?.trim() || raw;
+
+    console.log(`✏️ Rewrite (${kopje}):`, text);
+
+    res.json({ text });
+
   } catch (err) {
-    console.error("❌ Fout bij rewrite:", err);
-    res.status(500).json({ error: "Herschrijven mislukt" });
+    console.error("💥 Fout bij rewrite:", err);
+    res.status(500).json({ error: "Rewrite-fout", detail: err.message });
   }
 });
 
-// ✅ Server starten
-app.listen(PORT, () => console.log(`🚀 RapX voice server draait op poort ${PORT}`));
+// 🔹 Start server
+app.listen(PORT, () => {
+  console.log(`🚀 RapX Voice Server actief op poort ${PORT}`);
+});
