@@ -124,6 +124,6 @@ app.post("/api/rewrite", async (req, res) => {
 });
 
 // 🔹 Start server
-app.listen(PORT, () => {
-  console.log(`🚀 RapX Voice Server actief op poort ${PORT}`);
+app.listen(process.env.PORT || 10000, "0.0.0.0", () => {
+  console.log(`🚀 RapX Voice Server actief en luistert op poort ${process.env.PORT || 10000}`);
 });
