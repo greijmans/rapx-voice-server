@@ -50,9 +50,11 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     const blob = new Blob([fileBuffer], { type: mimetype });
 
     // ✅ FormData correct vullen
-    const form = new FormData();
-    form.append("model", "whisper-1");
-    form.append("file", blob, req.file.originalname);
+const form = new FormData();
+form.append("model", "whisper-1");
+form.append("file", blob, req.file.originalname);
+const lang = (req.body && req.body.language) ? String(req.body.language) : null;
+if (lang) form.append("language", lang);
 
     const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
