@@ -1,64 +1,61 @@
 import express from "express";
+import cors from "cors";
 import multer from "multer";
 import fs from "fs";
 import OpenAI from "openai";
 
 const app = express();
-const upload = multer({ dest: "uploads/" });
+app.use(cors());
+app.use(express.json());
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-app.use(express.json());
-app.get("/", (req, res) => res.json({ ok: true }));
+// 🔹 Multer opslag
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, "uploads/"),
+  filename: (req, file, cb) => cb(null, Date.now() + ".webm")
+});
+const upload = multer({ storage });
 
-// 🎧 Transcriptie via Whisper
+// 🔹 Whisper transcriptie + lichte taalcorrectie
 app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
   try {
     const filePath = req.file.path;
-    const response = await openai.audio.transcriptions.create({
-      model: "whisper-1",
+    const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(filePath),
-      language: "nl",
+      model: "whisper-1",
+      language: "nl"
     });
-    fs.unlinkSync(filePath);
-    res.json({ text: response.text });
-  } catch (err) {
-    console.error("Transcribe-fout", err);
-    res.status(500).json({ error: "Transcribe-fout" });
-  }
-});
 
-// ✏️ Alleen grammaticale correctie — geen interpretatie
-app.post("/api/rewrite", async (req, res) => {
-  try {
-    const { raw } = req.body;
+    let text = transcription.text.trim();
 
-    const prompt = `
-Je bent een grammatica- en taalcorrector voor inspectierapporten.
-Verbeter enkel grammatica, spelling en hoofdletters.
-Vul afgebroken zinnen aan tot ze grammaticaal compleet zijn.
-Voeg geen inhoud, interpretatie of extra informatie toe.
-Behoud de zakelijke toon en korte formuleringen.
-Voorbeeld:
-Input: "elektra niet gekeurd, maatregel"
-Output: "De elektrische installatie is niet gekeurd. Maatregel opgenomen."
-`;
-
-    const completion = await openai.chat.completions.create({
+    // 🔸 Alleen grammaticale correctie, geen interpretatie
+    const grammarFix = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: prompt },
-        { role: "user", content: raw },
+        {
+          role: "system",
+          content: `
+Je bent een taalcorrector. Corrigeer alleen grammatica, hoofdletters en leestekens in Nederlandse tekst.
+Voeg geen betekenis toe, verzin geen context, en gebruik geen uitleg.
+Als het woord 'maatregel' voorkomt, eindig de zin met 'Maatregel opgenomen.'
+Alleen verbeter de bestaande tekst — geen interpretatie of toevoeging.
+`
+        },
+        { role: "user", content: text }
       ],
-      temperature: 0,
+      temperature: 0
     });
 
-    const text = completion.choices[0]?.message?.content?.trim();
-    res.json({ text });
-  } catch (err) {
-    console.error("Rewrite-fout", err);
-    res.status(500).json({ error: "Rewrite-fout" });
+    const corrected = grammarFix.choices[0].message.content.trim();
+
+    fs.unlink(filePath, () => {}); // bestand opruimen
+    res.json({ text: corrected });
+  } catch (error) {
+    console.error("Transcribe-fout:", error);
+    res.status(500).json({ error: "Transcribe-fout", detail: error.message });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Voice server running on port ${PORT}`));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🎤 RapX Voice Server actief op poort ${PORT}`));
