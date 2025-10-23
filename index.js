@@ -41,11 +41,12 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     const filePath = req.file.path;
     console.log("🎧 Ontvangen audio:", filePath);
 
-    const tr = await openai.audio.transcriptions.create({
-      model: "whisper-1",
-      file: fs.createReadStream(filePath),
-      language: "nl"
-    });
+    // 🎧 Spraakherkenning (snelle versie)
+const tr = await openai.audio.transcriptions.create({
+  model: "gpt-4o-mini-transcribe",
+  file: fs.createReadStream(filePath),
+  language: "nl"
+});
 
     fs.unlink(filePath, () => {});
     console.log("✅ Whisper:", tr.text);
